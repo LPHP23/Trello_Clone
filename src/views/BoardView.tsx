@@ -3,14 +3,15 @@ import { DndContext, PointerSensor, closestCorners, useDroppable, useSensor, use
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
-  Activity, Archive, CheckCheck, ChevronDown, ChevronRight, Filter, Flag, GripVertical,
-  MessageCircle, MoreHorizontal, Paperclip, Plus, Rows3, X,
+  Activity, Archive, Check, CheckCheck, ChevronDown, ChevronRight, Filter, Flag, GripVertical, Lock,
+  MessageCircle, MoreHorizontal, Paperclip, Pencil, Plus, Rows3, Trash2, X,
 } from 'lucide-react'
 import { useStore } from '../store'
 import { Avatar, DueChip, Popover, daysUntil } from '../ui'
+import { colorHex } from '../data'
 import type { Board, Card, List } from '../types'
 
-type Filter = { assignee: string; due: '' | 'overdue' | 'week' }
+type Filter = { assignee: string; due: '' | 'overdue' | 'week'; hideDone: boolean }
 
 // Chặn "click mở card" ngay sau khi vừa thả một lần kéo
 const drag = { active: false }
@@ -18,7 +19,7 @@ const drag = { active: false }
 export default function BoardView({ id }: { id: string }) {
   const s = useStore()
   const board = s.data.boards.find((b) => b.id === id)
-  const [filter, setFilter] = useState<Filter>({ assignee: '', due: '' })
+  const [filter, setFilter] = useState<Filter>({ assignee: '', due: '', hideDone: false })
   const [archivedOpen, setArchivedOpen] = useState(false)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
@@ -27,19 +28,31 @@ export default function BoardView({ id }: { id: string }) {
       <div className="page">
         <h1>Không tìm thấy bảng</h1>
         <p className="muted">
-          Bảng này không tồn tại. <a href="#/boards">Quay lại danh sách bảng</a>
+          Bảng này không tồn tại hoặc đã bị xóa. <a href="#/boards">Quay lại danh sách bảng</a>
         </p>
       </div>
     )
   }
 
-  const match = (c: Card) => {
+  if (!s.canSee(board)) {
+    return (
+      <div className="page">
+        <h1>Bảng riêng tư</h1>
+        <p className="muted">
+          Bạn chưa được thêm vào bảng này. Hãy nhờ Admin mời bạn. <a href="#/boards">Quay lại danh sách bảng</a>
+        </p>
+      </div>
+    )
+  }
+
+  const match = (c: Card, listId: string) => {
+    if (filter.hideDone && (c.done || listId === board.doneList)) return false
     if (filter.assignee && c.assignee !== filter.assignee) return false
     if (filter.due === 'overdue') return !!c.due && daysUntil(c.due) < 0
     if (filter.due === 'week') return !!c.due && daysUntil(c.due) >= 0 && daysUntil(c.due) <= 7
     return true
   }
-  const filtering = !!(filter.assignee || filter.due)
+  const filtering = !!(filter.assignee || filter.due || filter.hideDone)
   const archived = board.lists.flatMap((l) => l.cards.filter((c) => c.archived).map((c) => ({ c, l })))
   const boardLogs = s.data.logs.filter((l) => l.boardId === board.id).slice(0, 40)
 
@@ -53,7 +66,13 @@ export default function BoardView({ id }: { id: string }) {
     <div className="board-shell">
       <div className="board-main">
         <div className="board-toolbar">
+          <span className="board-dot lg" style={{ background: colorHex(board.color) }} aria-hidden />
           <h1>{board.name}</h1>
+          {board.visibility === 'private' && (
+            <span className="muted" title="Bảng riêng tư, chỉ thành viên của bảng xem được">
+              <Lock size={13} />
+            </span>
+          )}
           <span className="muted desc">{board.desc}</span>
           <span className="spacer" />
 
@@ -86,8 +105,12 @@ export default function BoardView({ id }: { id: string }) {
                     <option value="week">Trong 7 ngày</option>
                   </select>
                 </label>
+                <label className="check-line">
+                  <input type="checkbox" checked={filter.hideDone} onChange={(e) => setFilter({ ...filter, hideDone: e.target.checked })} />
+                  Ẩn việc đã hoàn thành
+                </label>
                 <div className="menu-actions">
-                  <button className="btn" disabled={!filtering} onClick={() => setFilter({ assignee: '', due: '' })}>
+                  <button className="btn" disabled={!filtering} onClick={() => setFilter({ assignee: '', due: '', hideDone: false })}>
                     Xóa lọc
                   </button>
                   <button className="btn primary" onClick={close}>
@@ -135,6 +158,31 @@ export default function BoardView({ id }: { id: string }) {
                 >
                   <Archive size={14} /> Đã lưu trữ ({archived.length})
                 </button>
+                {s.role === 'Admin' && (
+                  <>
+                    <hr />
+                    <button
+                      onClick={() => {
+                        s.setModal({ kind: 'boardSettings', boardId: board.id })
+                        close()
+                      }}
+                    >
+                      <Pencil size={14} /> Cài đặt bảng
+                    </button>
+                    <button
+                      className="danger-text"
+                      onClick={() => {
+                        close()
+                        if (window.confirm(`Xóa bảng “${board.name}” cùng toàn bộ công việc trong bảng?`)) {
+                          s.deleteBoard(board.id)
+                          location.hash = '#/boards'
+                        }
+                      }}
+                    >
+                      <Trash2 size={14} /> Xóa bảng
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </Popover>
@@ -215,12 +263,12 @@ export default function BoardView({ id }: { id: string }) {
   )
 }
 
-function Column({ board, list, match }: { board: Board; list: List; match: (c: Card) => boolean }) {
+function Column({ board, list, match }: { board: Board; list: List; match: (c: Card, listId: string) => boolean }) {
   const s = useStore()
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(list.title)
   const cards = list.cards.filter((c) => !c.archived)
-  const shown = cards.filter(match)
+  const shown = cards.filter((c) => match(c, list.id))
   const admin = s.role === 'Admin'
 
   const { setNodeRef, isOver } = useDroppable({ id: list.id })
@@ -308,7 +356,14 @@ function Column({ board, list, match }: { board: Board; list: List; match: (c: C
       <SortableContext items={shown.map((c) => c.id)} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className={`card-stack ${isOver ? 'over' : ''}`}>
           {shown.map((c) => (
-            <TaskCard key={c.id} card={c} done={list.id === board.doneList} onOpen={() => s.setOpenCard({ boardId: board.id, cardId: c.id })} />
+            <TaskCard
+              key={c.id}
+              card={c}
+              done={!!c.done || list.id === board.doneList}
+              canTick={admin}
+              onTick={() => s.toggleDone(board.id, c.id)}
+              onOpen={() => s.setOpenCard({ boardId: board.id, cardId: c.id })}
+            />
           ))}
         </div>
       </SortableContext>
@@ -318,7 +373,9 @@ function Column({ board, list, match }: { board: Board; list: List; match: (c: C
   )
 }
 
-function TaskCard({ card, done, onOpen }: { card: Card; done: boolean; onOpen: () => void }) {
+type TaskCardProps = { card: Card; done: boolean; canTick: boolean; onTick: () => void; onOpen: () => void }
+
+function TaskCard({ card, done, canTick, onTick, onOpen }: TaskCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id })
   const checked = card.checklist.filter((x) => x.done).length
   return (
@@ -340,7 +397,24 @@ function TaskCard({ card, done, onOpen }: { card: Card; done: boolean; onOpen: (
           ))}
         </div>
       )}
-      <h3>{card.title}</h3>
+      <div className="card-title">
+        <button
+          type="button"
+          className={`tick ${card.done ? 'on' : ''}`}
+          disabled={!canTick}
+          title={canTick ? (card.done ? 'Bỏ đánh dấu hoàn thành' : 'Đánh dấu hoàn thành') : 'Chỉ Admin xác nhận hoàn thành'}
+          aria-label={card.done ? 'Bỏ đánh dấu hoàn thành' : 'Đánh dấu hoàn thành'}
+          aria-pressed={!!card.done}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            onTick()
+          }}
+        >
+          <Check size={11} strokeWidth={3} />
+        </button>
+        <h3>{card.title}</h3>
+      </div>
       <div className="meta">
         <DueChip due={card.due} />
         {card.priority === 'Cao' && (

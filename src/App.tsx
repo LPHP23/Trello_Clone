@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Bell, FolderKanban, LayoutDashboard, LayoutGrid, PanelLeft, Plus, Search, Users } from 'lucide-react'
+import { Bell, FolderKanban, LayoutDashboard, LayoutGrid, Lock, PanelLeft, Plus, Search, Users } from 'lucide-react'
 import { Provider, useStore } from './store'
 import { Avatar, Modal, Popover, daysUntil } from './ui'
-import type { Template } from './data'
+import { boardColors, colorHex } from './data'
+import type { Template, Visibility } from './types'
 import Dashboard from './views/Dashboard'
 import Boards from './views/Boards'
 import BoardView from './views/BoardView'
@@ -78,6 +79,7 @@ function Shell() {
       {search && <SearchModal onClose={() => setSearch(false)} />}
       {s.modal === 'newBoard' && <NewBoardModal />}
       {s.modal === 'invite' && <InviteModal />}
+      {typeof s.modal === 'object' && s.modal?.kind === 'boardSettings' && <BoardSettingsModal boardId={s.modal.boardId} />}
     </div>
   )
 }
@@ -117,11 +119,13 @@ function Sidebar({ route }: { route: { name: string; id: string } }) {
         )}
       </div>
       <nav className="board-links">
-        {s.data.boards.map((b) => (
+        {s.boards.map((b) => (
           <a key={b.id} className={`nav-item ${route.name === 'board' && route.id === b.id ? 'active' : ''}`} href={`#/board/${b.id}`}>
-            <span className="board-dot" /> {b.name}
+            <span className="board-dot" style={{ background: colorHex(b.color) }} /> {b.name}
+            {b.visibility === 'private' && <Lock size={12} className="right muted" aria-label="Riêng tư" />}
           </a>
         ))}
+        {!s.boards.length && <p className="empty small">Chưa có bảng nào được chia sẻ với bạn.</p>}
       </nav>
 
       <p className="shortcuts">
@@ -133,17 +137,17 @@ function Sidebar({ route }: { route: { name: string; id: string } }) {
 
 function Topbar({ route, onSearch }: { route: { name: string; id: string }; onSearch: () => void }) {
   const s = useStore()
-  const board = s.data.boards.find((b) => b.id === route.id)
+  const board = s.boards.find((b) => b.id === route.id)
   const title =
     route.name === 'boards' ? 'Tất cả bảng' : route.name === 'members' ? 'Thành viên' : route.name === 'board' ? board?.name ?? 'Bảng' : 'Tổng quan'
 
   // Thông báo: việc sắp đến hạn của tôi + hoạt động của người khác trên việc tôi phụ trách (Admin thấy tất cả)
   const items = useMemo(() => {
     const out: { id: string; text: React.ReactNode; meta: string; who?: string }[] = []
-    s.data.boards.forEach((b) =>
+    s.boards.forEach((b) =>
       b.lists.forEach((l) =>
         l.cards.forEach((c) => {
-          if (!c.archived && c.assignee === s.user && c.due && l.id !== b.doneList && daysUntil(c.due) <= 1) {
+          if (!c.archived && !c.done && c.assignee === s.user && c.due && l.id !== b.doneList && daysUntil(c.due) <= 1) {
             const n = daysUntil(c.due)
             out.push({
               id: `due-${c.id}-${c.due}`,
@@ -156,12 +160,14 @@ function Topbar({ route, onSearch }: { route: { name: string; id: string }; onSe
     )
     s.data.logs.forEach((l) => {
       if (l.by === s.user) return
-      const card = s.data.boards.find((b) => b.id === l.boardId)?.lists.flatMap((x) => x.cards).find((c) => c.id === l.cardId)
+      if (!s.boards.some((b) => b.id === l.boardId)) return
+      const card = s.boards.find((b) => b.id === l.boardId)?.lists.flatMap((x) => x.cards).find((c) => c.id === l.cardId)
       if (!card && s.role !== 'Admin') return
       if (card && card.assignee !== s.user && s.role !== 'Admin') return
-      out.push({ id: l.id, who: l.by, text: <>{l.text}</>, meta: `${l.time} · ${s.data.boards.find((b) => b.id === l.boardId)?.name ?? ''}` })
+      out.push({ id: l.id, who: l.by, text: <>{l.text}</>, meta: `${l.time} · ${s.boards.find((b) => b.id === l.boardId)?.name ?? ''}` })
     })
     return out.slice(0, 8)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.data, s.user, s.role])
   const unread = items.filter((i) => !s.ui.seen.includes(i.id)).length
 
@@ -276,7 +282,7 @@ function SearchModal({ onClose }: { onClose: () => void }) {
     const k = q.trim().toLowerCase()
     if (!k) return []
     const out: { boardId: string; boardName: string; listTitle: string; id: string; title: string; assignee: string }[] = []
-    s.data.boards.forEach((b) =>
+    s.boards.forEach((b) =>
       b.lists.forEach((l) =>
         l.cards.forEach((c) => {
           const hay = `${c.title} ${c.desc} ${c.assignee} ${c.labels.join(' ')} ${c.comments.map((x) => x.text).join(' ')}`.toLowerCase()
@@ -285,7 +291,7 @@ function SearchModal({ onClose }: { onClose: () => void }) {
       ),
     )
     return out.slice(0, 12)
-  }, [q, s.data.boards])
+  }, [q, s.boards])
 
   const pick = (r: (typeof results)[number]) => {
     onClose()
@@ -326,13 +332,50 @@ function SearchModal({ onClose }: { onClose: () => void }) {
   )
 }
 
+function ColorPicker({ value, onPick }: { value: string; onPick: (id: string) => void }) {
+  return (
+    <span className="field">
+      Màu nhận diện
+      <span className="swatches">
+        {boardColors.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`swatch ${value === c.id ? 'on' : ''}`}
+            style={{ background: c.hex }}
+            title={c.label}
+            aria-label={c.label}
+            aria-pressed={value === c.id}
+            onClick={() => onPick(c.id)}
+          />
+        ))}
+      </span>
+    </span>
+  )
+}
+
+function VisibilityField({ value, onChange }: { value: Visibility; onChange: (v: Visibility) => void }) {
+  return (
+    <label className="field">
+      Quyền riêng tư
+      <select value={value} onChange={(e) => onChange(e.target.value as Visibility)}>
+        <option value="workspace">Workspace · mọi thành viên trong team xem được</option>
+        <option value="private">Riêng tư · chỉ người được thêm vào bảng</option>
+      </select>
+    </label>
+  )
+}
+
 function NewBoardModal() {
   const s = useStore()
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
   const [tpl, setTpl] = useState<Template>('basic')
+  const [color, setColor] = useState('slate')
+  const [visibility, setVisibility] = useState<Visibility>('workspace')
+
   const submit = () => {
-    const id = s.createBoard(name, desc, tpl)
+    const id = s.createBoard({ name, desc, template: tpl, color, visibility })
     if (id) {
       s.setModal(null)
       location.hash = `#/board/${id}`
@@ -355,6 +398,8 @@ function NewBoardModal() {
           <option value="dev">Developer: 12 danh sách theo quy trình của team</option>
         </select>
       </label>
+      <ColorPicker value={color} onPick={setColor} />
+      <VisibilityField value={visibility} onChange={setVisibility} />
       <div className="modal-actions">
         <button className="btn" onClick={() => s.setModal(null)}>
           Hủy
@@ -367,12 +412,73 @@ function NewBoardModal() {
   )
 }
 
+function BoardSettingsModal({ boardId }: { boardId: string }) {
+  const s = useStore()
+  const board = s.data.boards.find((b) => b.id === boardId)
+  const [name, setName] = useState(board?.name ?? '')
+  const [desc, setDesc] = useState(board?.desc ?? '')
+  const [color, setColor] = useState(board?.color ?? 'slate')
+  const [visibility, setVisibility] = useState<Visibility>(board?.visibility ?? 'workspace')
+  const [members, setMembers] = useState<string[]>(board?.members ?? [])
+  if (!board) return null
+
+  const toggleMember = (n: string) => setMembers((m) => (m.includes(n) ? m.filter((x) => x !== n) : [...m, n]))
+  const submit = () => {
+    s.updateBoard(board.id, { name, desc, color, visibility, members })
+    s.setModal(null)
+  }
+
+  return (
+    <Modal title="Cài đặt bảng" sub="Đổi tên, màu nhận diện và ai được vào bảng này." onClose={() => s.setModal(null)}>
+      <label className="field">
+        Tên bảng
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} />
+      </label>
+      <label className="field">
+        Mô tả
+        <input value={desc} onChange={(e) => setDesc(e.target.value)} />
+      </label>
+      <ColorPicker value={color} onPick={setColor} />
+      <VisibilityField value={visibility} onChange={setVisibility} />
+
+      {visibility === 'private' && (
+        <span className="field">
+          Thành viên của bảng
+          <span className="member-picks">
+            {s.data.members.map((m) => (
+              <label className="check-line" key={m.name}>
+                <input type="checkbox" checked={members.includes(m.name)} disabled={m.name === s.user} onChange={() => toggleMember(m.name)} />
+                {m.name}
+                <span className="muted small right">{m.role}</span>
+              </label>
+            ))}
+          </span>
+          <small className="muted">Bạn luôn nằm trong bảng mình quản trị nên không bỏ chọn được.</small>
+        </span>
+      )}
+
+      <div className="modal-actions">
+        <button className="btn" onClick={() => s.setModal(null)}>
+          Hủy
+        </button>
+        <button className="btn primary" disabled={!name.trim()} onClick={submit}>
+          Lưu thay đổi
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
 function InviteModal() {
   const s = useStore()
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<'Admin' | 'Member'>('Member')
+  const [scope, setScope] = useState<'workspace' | 'board'>('workspace')
+  const [boardId, setBoardId] = useState(s.boards[0]?.id ?? '')
+
   const submit = () => {
-    if (s.addMember(email, role)) s.setModal(null)
+    const boards = scope === 'board' && boardId ? [boardId] : null
+    if (s.addMember(email, boards ? 'Member' : role, boards)) s.setModal(null)
   }
   return (
     <Modal title="Mời thành viên" sub="Người ngoài team chỉ vào được khi Admin mời qua Gmail." onClose={() => s.setModal(null)}>
@@ -381,17 +487,37 @@ function InviteModal() {
         <input autoFocus type="email" value={email} placeholder="ten@gmail.com" onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} />
       </label>
       <label className="field">
-        Vai trò
-        <select value={role} onChange={(e) => setRole(e.target.value as 'Admin' | 'Member')}>
-          <option>Member</option>
-          <option>Admin</option>
+        Phạm vi truy cập
+        <select value={scope} onChange={(e) => setScope(e.target.value as 'workspace' | 'board')}>
+          <option value="workspace">Toàn workspace · vào được mọi bảng chung</option>
+          <option value="board">Khách · chỉ vào được một bảng</option>
         </select>
       </label>
+      {scope === 'board' ? (
+        <label className="field">
+          Bảng được vào
+          <select value={boardId} onChange={(e) => setBoardId(e.target.value)}>
+            {s.boards.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <label className="field">
+          Vai trò
+          <select value={role} onChange={(e) => setRole(e.target.value as 'Admin' | 'Member')}>
+            <option>Member</option>
+            <option>Admin</option>
+          </select>
+        </label>
+      )}
       <div className="modal-actions">
         <button className="btn" onClick={() => s.setModal(null)}>
           Hủy
         </button>
-        <button className="btn primary" disabled={!email.trim()} onClick={submit}>
+        <button className="btn primary" disabled={!email.trim() || (scope === 'board' && !boardId)} onClick={submit}>
           Gửi lời mời
         </button>
       </div>

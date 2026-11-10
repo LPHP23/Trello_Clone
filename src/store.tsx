@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
-import type { Board, Card, Data, Role } from './types'
-import { makeBoard, seedData, type Template } from './data'
+import type { Board, Card, Data, Member, Role, Template, Visibility } from './types'
+import { makeBoard, seedData } from './data'
 
 const DATA_KEY = 'trello-clone-v2-data'
 const UI_KEY = 'trello-clone-v2-ui'
@@ -9,17 +9,33 @@ const OLD_KEY = 'trello-clone-v1-data'
 
 type UI = { nav: boolean; activity: boolean; seen: string[] }
 export type OpenCard = { boardId: string; cardId: string } | null
-export type Modal = 'newBoard' | 'invite' | null
+export type Modal = 'newBoard' | 'invite' | { kind: 'boardSettings'; boardId: string } | null
+export type NewBoardInput = { name: string; desc: string; template: Template; color: string; visibility: Visibility }
 
 const nowText = () => new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
 const uid = (p: string) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5)
+
+/** Bổ sung các trường mới (màu, quyền riêng tư, phạm vi bảng) cho dữ liệu lưu từ bản trước. */
+function normalize(d: Data): Data {
+  const everyone = d.members.map((m) => m.name)
+  return {
+    ...d,
+    members: d.members.map((m) => ({ ...m, boards: m.boards === undefined ? null : m.boards })),
+    boards: d.boards.map((b) => ({
+      ...b,
+      color: b.color ?? 'slate',
+      visibility: b.visibility ?? 'workspace',
+      members: Array.isArray(b.members) && b.members.length ? b.members : everyone,
+    })),
+  }
+}
 
 function loadData(): Data {
   try {
     const raw = localStorage.getItem(DATA_KEY)
     if (raw) {
       const d = JSON.parse(raw)
-      if (Array.isArray(d.boards) && Array.isArray(d.members)) return d
+      if (Array.isArray(d.boards) && Array.isArray(d.members)) return normalize(d)
     }
     // Chuyển dữ liệu từ bản v1 (một board duy nhất) nếu có
     const old = localStorage.getItem(OLD_KEY)
@@ -28,7 +44,7 @@ function loadData(): Data {
       const base = seedData()
       if (Array.isArray(o.lists)) base.boards[0].lists = o.lists
       if (typeof o.user === 'string' && base.members.some((m) => m.name === o.user)) base.user = o.user
-      return base
+      return normalize(base)
     }
   } catch {
     /* dùng dữ liệu mẫu */
@@ -55,6 +71,8 @@ function loadUi(): UI {
 
 export type Store = {
   data: Data
+  /** Các bảng người đang đăng nhập được phép xem (CF2 phạm vi + CF3 quyền riêng tư). */
+  boards: Board[]
   user: string
   role: Role
   ui: UI
@@ -75,6 +93,8 @@ export type Store = {
   archiveCard: (boardId: string, cardId: string) => void
   restoreCard: (boardId: string, cardId: string) => void
   addComment: (boardId: string, cardId: string, text: string) => void
+  /** Tick xác nhận hoàn thành. Chỉ Admin, giống luật chuyển card sang Done. */
+  toggleDone: (boardId: string, cardId: string) => void
   // list
   createList: (boardId: string, title: string) => void
   renameList: (boardId: string, listId: string, title: string) => void
@@ -82,11 +102,17 @@ export type Store = {
   toggleCollapse: (boardId: string, listId: string) => void
   collapseEmpty: (boardId: string, collapse: boolean) => void
   // board
-  createBoard: (name: string, desc: string, template: Template) => string | null
+  createBoard: (input: NewBoardInput) => string | null
+  updateBoard: (boardId: string, patch: Partial<Pick<Board, 'name' | 'desc' | 'color' | 'visibility' | 'members'>>) => void
+  deleteBoard: (boardId: string) => void
+  canSee: (board: Board, name?: string) => boolean
   // members
-  addMember: (email: string, role: Role) => boolean
+  addMember: (email: string, role: Role, boards: string[] | null) => boolean
   setMemberRole: (name: string, role: Role) => void
+  setMemberBoards: (name: string, boards: string[] | null) => void
   removeMember: (name: string) => void
+  /** Link mời demo, dùng cho nút sao chép trong trang Thành viên (CF2). */
+  inviteLink: string
 }
 
 const Ctx = createContext<Store>(null as unknown as Store)
@@ -149,8 +175,17 @@ export function Provider({ children }: { children: React.ReactNode }) {
   }
   const canEditCard = (c: Card) => isAdmin || c.assignee === user
 
+  /** Người này có được xem bảng không: khách bị giới hạn bảng, bảng riêng tư chỉ cho thành viên bảng. */
+  const canSee = (b: Board, name: string = user) => {
+    const m = data.members.find((x) => x.name === name)
+    if (m?.boards && !m.boards.includes(b.id)) return false
+    if (b.visibility === 'private') return b.members.includes(name)
+    return true
+  }
+
   const store: Store = {
     data,
+    boards: data.boards.filter((b) => canSee(b)),
     user,
     role,
     ui,
@@ -221,7 +256,9 @@ export function Provider({ children }: { children: React.ReactNode }) {
           const oldIndex = fl.cards.findIndex((c) => c.id === activeId)
           const overIndex = tl.cards.findIndex((c) => c.id === overId) // -1 khi thả vào vùng trống của list
           const [item] = fl.cards.splice(oldIndex, 1)
-          tl.cards.splice(overIndex < 0 ? tl.cards.length : overIndex, 0, item)
+          // Kéo ra khỏi Done thì bỏ luôn dấu xác nhận hoàn thành.
+          const moved = from.id === b.doneList && to.id !== b.doneList ? { ...item, done: false, doneBy: undefined, doneAt: undefined } : item
+          tl.cards.splice(overIndex < 0 ? tl.cards.length : overIndex, 0, moved)
           return { ...b, lists }
         })
         return from.id !== to.id ? withLog(moved, `đã chuyển “${card.title}” sang ${to.title}`, boardId, card.id) : moved
@@ -254,6 +291,35 @@ export function Provider({ children }: { children: React.ReactNode }) {
           `đã bình luận trong “${c.title}”`, boardId, cardId,
         ),
       )
+    },
+
+    toggleDone: (boardId, cardId) => {
+      const board = data.boards.find((b) => b.id === boardId)
+      const list = board?.lists.find((l) => l.cards.some((c) => c.id === cardId))
+      const card = list?.cards.find((c) => c.id === cardId)
+      if (!board || !list || !card) return
+      if (!isAdmin) return notify('Chỉ Admin được xác nhận công việc đã hoàn thành')
+
+      const on = !card.done
+      const doneTitle = board.lists.find((l) => l.id === board.doneList)?.title ?? 'Done'
+      setData((d) => {
+        const next = editBoard(d, boardId, (b) => {
+          const lists = b.lists.map((l) => ({ ...l, cards: [...l.cards] }))
+          const fl = lists.find((l) => l.id === list.id)!
+          const i = fl.cards.findIndex((c) => c.id === cardId)
+          const updated: Card = { ...fl.cards[i], done: on, doneBy: on ? user : undefined, doneAt: on ? nowText() : undefined }
+          const dl = lists.find((l) => l.id === b.doneList)
+          if (on && dl && list.id !== b.doneList) {
+            fl.cards.splice(i, 1)
+            dl.cards.unshift(updated)
+          } else {
+            fl.cards[i] = updated
+          }
+          return { ...b, lists }
+        })
+        return withLog(next, on ? `đã xác nhận hoàn thành “${card.title}”` : `đã bỏ xác nhận hoàn thành “${card.title}”`, boardId, cardId)
+      })
+      notify(on ? (list.id === board.doneList ? 'Đã xác nhận hoàn thành' : `Đã hoàn thành và chuyển sang ${doneTitle}`) : 'Đã bỏ đánh dấu hoàn thành')
     },
 
     createList: (boardId, title) => {
@@ -290,19 +356,54 @@ export function Provider({ children }: { children: React.ReactNode }) {
         })),
       ),
 
-    createBoard: (name, desc, template) => {
-      const n = name.trim()
+    createBoard: (input) => {
+      const n = input.name.trim()
       if (!n) return null
       if (!isAdmin) {
         notify('Chỉ Admin được tạo bảng')
         return null
       }
       const id = uid('b')
-      setData((d) => ({ ...d, boards: [...d.boards, makeBoard(id, n, desc.trim(), template)] }))
+      // Bảng riêng tư mặc định gồm người tạo; bảng workspace gồm mọi thành viên đã tham gia.
+      const members =
+        input.visibility === 'private' ? [user] : data.members.filter((m) => !m.pending).map((m) => m.name)
+      setData((d) =>
+        withLog({ ...d, boards: [...d.boards, makeBoard(id, { ...input, name: n, desc: input.desc.trim(), members })] }, `đã tạo bảng “${n}”`, id),
+      )
       return id
     },
 
-    addMember: (email, r) => {
+    updateBoard: (boardId, patch) => {
+      if (!isAdmin) return notify('Chỉ Admin được chỉnh sửa bảng')
+      const b0 = data.boards.find((b) => b.id === boardId)
+      if (!b0) return
+      const next = { ...patch }
+      if (next.name !== undefined) {
+        const n = next.name.trim()
+        if (!n) return notify('Tên bảng không được để trống')
+        next.name = n
+      }
+      const vis = next.visibility ?? b0.visibility
+      if (vis === 'private') {
+        // Không để chính mình rơi ra khỏi bảng riêng tư rồi mất quyền vào lại.
+        const list = next.members ?? b0.members
+        next.members = list.includes(user) ? list : [...list, user]
+      }
+      setData((d) => editBoard(d, boardId, (b) => ({ ...b, ...next })))
+      notify('Đã lưu thay đổi của bảng')
+    },
+
+    deleteBoard: (boardId) => {
+      if (!isAdmin) return notify('Chỉ Admin được xóa bảng')
+      const b = data.boards.find((x) => x.id === boardId)
+      if (!b) return
+      setData((d) => ({ ...d, boards: d.boards.filter((x) => x.id !== boardId), logs: d.logs.filter((l) => l.boardId !== boardId) }))
+      notify(`Đã xóa bảng “${b.name}”`)
+    },
+
+    canSee,
+
+    addMember: (email, r, boards) => {
       const e = email.trim().toLowerCase()
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) {
         notify('Địa chỉ Gmail chưa hợp lệ')
@@ -318,9 +419,19 @@ export function Provider({ children }: { children: React.ReactNode }) {
       }
       const local = e.split('@')[0].replace(/[._-]+/g, ' ')
       const name = local.replace(/\b\p{L}/gu, (ch) => ch.toUpperCase())
-      setData((d) => ({ ...d, members: [...d.members, { name, email: e, role: r, pending: true }] }))
-      notify('Đã gửi lời mời tham gia')
+      setData((d) => ({
+        ...d,
+        members: [...d.members, { name, email: e, role: r, pending: true, boards }],
+        // Người mới chỉ được thêm vào các bảng workspace, không tự vào bảng riêng tư.
+        boards: d.boards.map((b) => (b.visibility === 'workspace' && (!boards || boards.includes(b.id)) ? { ...b, members: [...b.members, name] } : b)),
+      }))
+      notify(boards ? 'Đã mời khách vào bảng đã chọn' : 'Đã gửi lời mời tham gia workspace')
       return true
+    },
+
+    setMemberBoards: (name, boards) => {
+      if (!isAdmin) return notify('Chỉ Admin được đổi phạm vi truy cập')
+      setData((d) => ({ ...d, members: d.members.map((m) => (m.name === name ? { ...m, boards } : m)) }))
     },
 
     setMemberRole: (name, r) => {
@@ -334,8 +445,15 @@ export function Provider({ children }: { children: React.ReactNode }) {
     removeMember: (name) => {
       if (!isAdmin) return notify('Chỉ Admin được xóa thành viên')
       if (name === user) return notify('Bạn không thể tự xóa mình')
-      setData((d) => ({ ...d, members: d.members.filter((m) => m.name !== name) }))
+      setData((d) => ({
+        ...d,
+        members: d.members.filter((m) => m.name !== name),
+        boards: d.boards.map((b) => ({ ...b, members: b.members.filter((x) => x !== name) })),
+      }))
+      notify(`Đã xóa ${name} khỏi workspace`)
     },
+
+    inviteLink: `${location.origin}${location.pathname}#/join/ws-northstar`,
   }
 
   return (

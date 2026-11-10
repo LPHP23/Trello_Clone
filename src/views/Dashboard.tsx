@@ -7,7 +7,8 @@ type Row = { b: Board; l: List; c: Card }
 
 export default function Dashboard() {
   const s = useStore()
-  const { boards, logs } = s.data
+  const { logs } = s.data
+  const boards = s.boards
   const mine: Row[] = []
   const approve: Row[] = []
   let doneMine = 0
@@ -16,7 +17,7 @@ export default function Dashboard() {
     b.lists.forEach((l) =>
       l.cards.forEach((c) => {
         if (c.archived) return
-        const isDone = l.id === b.doneList
+        const isDone = !!c.done || l.id === b.doneList
         if (c.assignee === s.user) (isDone ? (doneMine += 1) : mine.push({ b, l, c }))
         if (s.role === 'Admin' && b.approveList && l.id === b.approveList) approve.push({ b, l, c })
       }),
@@ -90,8 +91,8 @@ export default function Dashboard() {
           <section className="panel">
             <h2>Tiến độ các bảng</h2>
             {boards.map((b) => {
-              const all = b.lists.flatMap((l) => l.cards.filter((c) => !c.archived).map(() => l.id))
-              const done = all.filter((id) => id === b.doneList).length
+              const all = b.lists.flatMap((l) => l.cards.filter((c) => !c.archived).map((c) => ({ listId: l.id, c })))
+              const done = all.filter((x) => x.c.done || x.listId === b.doneList).length
               const pct = all.length ? Math.round((done / all.length) * 100) : 0
               return (
                 <a className="progress-row" href={`#/board/${b.id}`} key={b.id}>
@@ -112,7 +113,7 @@ export default function Dashboard() {
 
           <section className="panel">
             <h2>Hoạt động gần đây</h2>
-            {logs.slice(0, 6).map((l) => (
+            {logs.filter((l) => boards.some((b) => b.id === l.boardId)).slice(0, 6).map((l) => (
               <div className="log-row" key={l.id}>
                 <Avatar name={l.by} size={24} />
                 <p>

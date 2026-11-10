@@ -1,4 +1,4 @@
-import type { Board, Card, Data, List, Member } from './types'
+import type { Board, Card, Data, List, Member, Template, Visibility } from './types'
 
 export const names = ['Minh Anh', 'Quang Huy', 'Thanh Thu', 'Gia Bảo', 'Khánh Linh']
 const emailIds = ['minhanh', 'quanghuy', 'thanhthu', 'giabao', 'khanhlinh']
@@ -8,7 +8,22 @@ const seedMembers = (): Member[] =>
     name,
     email: `${emailIds[i]}@team.vn`,
     role: i === 0 ? 'Admin' : 'Member',
+    boards: null,
   }))
+
+/* ---------- Màu nhận diện bảng (CF3) ----------
+   Màu chỉ dùng cho chấm và viền bảng, không đổ nền cả trang, để giao diện vẫn ít màu. */
+
+export const boardColors: { id: string; label: string; hex: string }[] = [
+  { id: 'slate', label: 'Xám', hex: '#6b7280' },
+  { id: 'indigo', label: 'Chàm', hex: '#4a5bd4' },
+  { id: 'teal', label: 'Xanh ngọc', hex: '#0f766e' },
+  { id: 'moss', label: 'Xanh rêu', hex: '#4d7c2f' },
+  { id: 'amber', label: 'Hổ phách', hex: '#b45309' },
+  { id: 'plum', label: 'Tím mận', hex: '#7c3f8f' },
+]
+
+export const colorHex = (id: string) => boardColors.find((c) => c.id === id)?.hex ?? boardColors[0].hex
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
@@ -136,6 +151,9 @@ const devBoard = (): Board => ({
   desc: 'Theo dõi công việc và tiến độ phát triển sản phẩm.',
   lists: devListDefs.map(([id, title]) => list(id, title, devSample[id] ?? [])),
   ...devConfig,
+  color: 'indigo',
+  visibility: 'workspace',
+  members: [...names],
 })
 
 /* ---------- Designer board (cùng cấu trúc ứng dụng, khác bộ list) ---------- */
@@ -165,20 +183,24 @@ const designBoard = (): Board => ({
   evidenceFrom: 'd-progress',
   doneList: 'd-done',
   approveList: null,
+  color: 'teal',
+  visibility: 'workspace',
+  members: [...names],
 })
 
 /* ---------- Tạo board mới từ mẫu ---------- */
 
-export type Template = 'basic' | 'dev'
+export type { Template } from './types'
 
-export function makeBoard(id: string, name: string, desc: string, template: Template): Board {
-  if (template === 'dev') {
-    return { id, name, desc, lists: devListDefs.map(([lid, title]) => list(lid, title)), ...devConfig }
+type NewBoard = { name: string; desc: string; template: Template; color: string; visibility: Visibility; members: string[] }
+
+export function makeBoard(id: string, o: NewBoard): Board {
+  const common = { id, name: o.name, desc: o.desc, color: o.color, visibility: o.visibility, members: o.members }
+  if (o.template === 'dev') {
+    return { ...common, lists: devListDefs.map(([lid, title]) => list(lid, title)), ...devConfig }
   }
   return {
-    id,
-    name,
-    desc,
+    ...common,
     lists: [list('todo', 'Cần làm'), list('doing', 'Đang làm'), list('review', 'Chờ duyệt'), list('done', 'Hoàn thành')],
     rules: null,
     evidenceFrom: null,

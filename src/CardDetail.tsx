@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Archive, Eye, EyeOff, FileText, Plus, X } from 'lucide-react'
+import { Archive, Check, Eye, EyeOff, FileText, Plus, X } from 'lucide-react'
 import { useStore } from './store'
 import { Avatar } from './ui'
 import type { Priority } from './types'
@@ -32,6 +32,7 @@ export default function CardDetail() {
   const done = card.checklist.filter((x) => x.done).length
   const pct = card.checklist.length ? Math.round((done / card.checklist.length) * 100) : 0
   const cardLogs = s.data.logs.filter((l) => l.cardId === card.id)
+  const isDone = !!card.done || list.id === board.doneList
 
   const sendComment = () => {
     if (!comment.trim()) return
@@ -72,6 +73,16 @@ export default function CardDetail() {
           </span>
           <span className="spacer" />
           <button
+            className={`btn tick-btn ${card.done ? 'on' : ''}`}
+            onClick={() => s.toggleDone(board.id, card.id)}
+            disabled={!isAdmin}
+            title={isAdmin ? (card.done ? 'Bỏ đánh dấu hoàn thành' : 'Đánh dấu hoàn thành') : 'Chỉ Admin được xác nhận hoàn thành'}
+            aria-pressed={!!card.done}
+          >
+            <Check size={14} strokeWidth={3} />
+            {card.done ? 'Đã hoàn thành' : 'Hoàn thành'}
+          </button>
+          <button
             className="icon-btn"
             onClick={() => patch({ watching: !card.watching })}
             title={card.watching ? 'Bỏ theo dõi' : 'Theo dõi công việc'}
@@ -87,7 +98,7 @@ export default function CardDetail() {
           </button>
         </header>
 
-        <div className="drawer-body">
+        <div className={`drawer-body ${isDone ? 'is-done' : ''}`}>
           {editTitle && canEdit ? (
             <input
               className="title-input"
@@ -101,6 +112,11 @@ export default function CardDetail() {
             <h2 className={canEdit ? 'editable' : ''} onClick={() => canEdit && setEditTitle(true)} title={canEdit ? 'Bấm để sửa tên' : undefined}>
               {card.title}
             </h2>
+          )}
+          {card.done && (
+            <p className="note done-note">
+              <Check size={14} strokeWidth={3} /> {card.doneBy ?? 'Admin'} đã xác nhận hoàn thành{card.doneAt ? ` lúc ${card.doneAt}` : ''}.
+            </p>
           )}
           {!canEdit && <p className="note">Chỉ Admin hoặc người phụ trách mới chỉnh sửa được công việc này. Bạn vẫn có thể bình luận.</p>}
 
