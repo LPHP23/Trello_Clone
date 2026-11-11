@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Bell, FolderKanban, LayoutDashboard, LayoutGrid, Lock, PanelLeft, Plus, Search, Users } from 'lucide-react'
+import { Bell, FolderKanban, LayoutDashboard, LayoutGrid, Lock, LogOut, PanelLeft, Plus, Search, Users } from 'lucide-react'
 import { Provider, useStore } from './store'
 import { Avatar, Modal, Popover, daysUntil } from './ui'
 import { boardColors, colorHex } from './data'
@@ -8,6 +8,7 @@ import Dashboard from './views/Dashboard'
 import Boards from './views/Boards'
 import BoardView from './views/BoardView'
 import Members from './views/Members'
+import Auth from './views/Auth'
 import CardDetail from './CardDetail'
 
 function useRoute() {
@@ -33,6 +34,7 @@ function Shell() {
   const s = useStore()
   const route = useRoute()
   const [search, setSearch] = useState(false)
+  const signedIn = s.signedIn
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -51,6 +53,7 @@ function Shell() {
         setSearch(true)
       }
     }
+    if (!signedIn) return
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
@@ -60,6 +63,8 @@ function Shell() {
     if (window.innerWidth < 900 && s.ui.nav) s.toggleNav()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.name, route.id])
+
+  if (!signedIn) return <Auth />
 
   let view: React.ReactNode
   if (route.name === 'boards') view = <Boards />
@@ -263,6 +268,14 @@ function Topbar({ route, onSearch }: { route: { name: string; id: string }; onSe
             <button
               onClick={() => {
                 close()
+                s.signOut()
+              }}
+            >
+              <LogOut size={14} /> Đăng xuất
+            </button>
+            <button
+              onClick={() => {
+                close()
                 if (window.confirm('Đặt lại toàn bộ dữ liệu mẫu? Các thay đổi trên trình duyệt này sẽ mất.')) s.reset()
               }}
             >
@@ -414,7 +427,7 @@ function NewBoardModal() {
 
 function BoardSettingsModal({ boardId }: { boardId: string }) {
   const s = useStore()
-  const board = s.data.boards.find((b) => b.id === boardId)
+  const board = s.boards.find((b) => b.id === boardId)
   const [name, setName] = useState(board?.name ?? '')
   const [desc, setDesc] = useState(board?.desc ?? '')
   const [color, setColor] = useState(board?.color ?? 'slate')
@@ -453,7 +466,10 @@ function BoardSettingsModal({ boardId }: { boardId: string }) {
               </label>
             ))}
           </span>
-          <small className="muted">Bạn luôn nằm trong bảng mình quản trị nên không bỏ chọn được.</small>
+          <small className="muted">
+            Chỉ {members.length} người được tick ở trên mới thấy bảng này. Người khác sẽ không thấy bảng ở thanh bên, trang Bảng, tìm kiếm và thông báo,
+            mở thẳng link cũng không vào được. Bạn luôn nằm trong bảng mình quản trị nên không bỏ chọn được.
+          </small>
         </span>
       )}
 

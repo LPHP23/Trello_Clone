@@ -7,7 +7,7 @@ const DATA_KEY = 'trello-clone-v2-data'
 const UI_KEY = 'trello-clone-v2-ui'
 const OLD_KEY = 'trello-clone-v1-data'
 
-type UI = { nav: boolean; activity: boolean; seen: string[] }
+type UI = { nav: boolean; activity: boolean; seen: string[]; signedIn: boolean }
 export type OpenCard = { boardId: string; cardId: string } | null
 export type Modal = 'newBoard' | 'invite' | { kind: 'boardSettings'; boardId: string } | null
 export type NewBoardInput = { name: string; desc: string; template: Template; color: string; visibility: Visibility }
@@ -61,12 +61,13 @@ function loadUi(): UI {
         nav: window.innerWidth < 900 ? false : !!u.nav,
         activity: !!u.activity && window.innerWidth >= 1100,
         seen: Array.isArray(u.seen) ? u.seen : [],
+        signedIn: !!u.signedIn,
       }
     }
   } catch {
     /* mặc định */
   }
-  return { nav: wide, activity: false, seen: [] }
+  return { nav: wide, activity: false, seen: [], signedIn: false }
 }
 
 export type Store = {
@@ -85,6 +86,12 @@ export type Store = {
   toggleActivity: () => void
   markSeen: (ids: string[]) => void
   setUser: (name: string) => void
+  /** Đăng nhập bằng một tài khoản đã có trong workspace. */
+  signIn: (name: string) => boolean
+  signOut: () => void
+  /** Đăng ký tài khoản mới rồi vào thẳng workspace. */
+  register: (name: string, email: string) => boolean
+  signedIn: boolean
   reset: () => void
   // card
   patchCard: (boardId: string, cardId: string, patch: Partial<Card>, logText?: string) => void
@@ -198,6 +205,56 @@ export function Provider({ children }: { children: React.ReactNode }) {
     toggleActivity: () => setUi((u) => ({ ...u, activity: !u.activity })),
     markSeen: (ids) => setUi((u) => ({ ...u, seen: Array.from(new Set([...u.seen, ...ids])).slice(-300) })),
     setUser: (name) => setData((d) => (d.members.some((m) => m.name === name && !m.pending) ? { ...d, user: name } : d)),
+
+    signedIn: ui.signedIn,
+
+    signIn: (name) => {
+      const m = data.members.find((x) => x.name === name)
+      if (!m) {
+        notify('Không tìm thấy tài khoản này')
+        return false
+      }
+      setData((d) => ({ ...d, members: d.members.map((x) => (x.name === name ? { ...x, pending: false } : x)), user: name }))
+      setUi((u) => ({ ...u, signedIn: true }))
+      notify(`Xin chào ${name}`)
+      return true
+    },
+
+    signOut: () => {
+      setUi((u) => ({ ...u, signedIn: false }))
+      location.hash = '#/'
+    },
+
+    register: (name, email) => {
+      const n = name.trim()
+      const e = email.trim().toLowerCase()
+      if (!n) {
+        notify('Hãy nhập họ tên')
+        return false
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) {
+        notify('Email chưa đúng định dạng')
+        return false
+      }
+      if (data.members.some((m) => m.email.toLowerCase() === e)) {
+        notify('Email này đã có tài khoản, hãy đăng nhập')
+        return false
+      }
+      if (data.members.some((m) => m.name === n)) {
+        notify('Tên này đã có người dùng, hãy thêm họ hoặc tên đệm')
+        return false
+      }
+      setData((d) => ({
+        ...d,
+        members: [...d.members, { name: n, email: e, role: 'Member', boards: null }],
+        // Người mới tự vào được các bảng chung, bảng riêng tư vẫn phải chờ Admin thêm.
+        boards: d.boards.map((b) => (b.visibility === 'workspace' ? { ...b, members: [...b.members, n] } : b)),
+        user: n,
+      }))
+      setUi((u) => ({ ...u, signedIn: true }))
+      notify(`Đã tạo tài khoản cho ${n}`)
+      return true
+    },
     reset: () => {
       try {
         localStorage.removeItem(DATA_KEY)
@@ -389,8 +446,20 @@ export function Provider({ children }: { children: React.ReactNode }) {
         const list = next.members ?? b0.members
         next.members = list.includes(user) ? list : [...list, user]
       }
-      setData((d) => editBoard(d, boardId, (b) => ({ ...b, ...next })))
-      notify('Đã lưu thay đổi của bảng')
+      const added = (next.members ?? b0.members).filter((n) => !b0.members.includes(n))
+      const removed = b0.members.filter((n) => !(next.members ?? b0.members).includes(n))
+      setData((d) => {
+        let out = editBoard(d, boardId, (b) => ({ ...b, ...next }))
+        if (vis === 'private' && added.length) out = withLog(out, `đã thêm ${added.join(', ')} vào bảng`, boardId)
+        if (vis === 'private' && removed.length) out = withLog(out, `đã gỡ ${removed.join(', ')} khỏi bảng`, boardId)
+        if (b0.visibility !== vis) out = withLog(out, vis === 'private' ? 'đã chuyển bảng sang riêng tư' : 'đã mở bảng cho cả workspace', boardId)
+        return out
+      })
+      notify(
+        vis === 'private'
+          ? `Đã lưu. Bảng riêng tư, ${(next.members ?? b0.members).length} người xem được.`
+          : 'Đã lưu. Bảng mở cho cả workspace.',
+      )
     },
 
     deleteBoard: (boardId) => {
@@ -422,8 +491,10 @@ export function Provider({ children }: { children: React.ReactNode }) {
       setData((d) => ({
         ...d,
         members: [...d.members, { name, email: e, role: r, pending: true, boards }],
-        // Người mới chỉ được thêm vào các bảng workspace, không tự vào bảng riêng tư.
-        boards: d.boards.map((b) => (b.visibility === 'workspace' && (!boards || boards.includes(b.id)) ? { ...b, members: [...b.members, name] } : b)),
+        // Mời vào workspace: chỉ vào các bảng chung. Mời làm khách của một bảng: vào đúng bảng đó, kể cả bảng riêng tư.
+        boards: d.boards.map((b) =>
+          (boards ? boards.includes(b.id) : b.visibility === 'workspace') ? { ...b, members: [...b.members, name] } : b,
+        ),
       }))
       notify(boards ? 'Đã mời khách vào bảng đã chọn' : 'Đã gửi lời mời tham gia workspace')
       return true
@@ -431,7 +502,12 @@ export function Provider({ children }: { children: React.ReactNode }) {
 
     setMemberBoards: (name, boards) => {
       if (!isAdmin) return notify('Chỉ Admin được đổi phạm vi truy cập')
-      setData((d) => ({ ...d, members: d.members.map((m) => (m.name === name ? { ...m, boards } : m)) }))
+      setData((d) => ({
+        ...d,
+        members: d.members.map((m) => (m.name === name ? { ...m, boards } : m)),
+        // Gán vào bảng nào thì thêm luôn vào danh sách thành viên của bảng đó, kể cả bảng riêng tư.
+        boards: d.boards.map((b) => (boards?.includes(b.id) && !b.members.includes(name) ? { ...b, members: [...b.members, name] } : b)),
+      }))
     },
 
     setMemberRole: (name, r) => {

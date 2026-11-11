@@ -6,7 +6,6 @@ import { colorHex } from '../data'
 export default function Boards() {
   const s = useStore()
   const admin = s.role === 'Admin'
-  const hidden = s.data.boards.length - s.boards.length
 
   return (
     <div className="page">
@@ -86,8 +85,7 @@ export default function Boards() {
         })}
       </div>
 
-      {!s.boards.length && <p className="empty">Bạn chưa được thêm vào bảng nào. Hãy nhờ Admin mời bạn.</p>}
-      {hidden > 0 && <p className="muted small hint-row">{hidden} bảng riêng tư khác không hiển thị vì bạn chưa phải thành viên của bảng.</p>}
+      {!s.boards.length && <p className="empty">Bạn chưa được thêm vào bảng nào. Hãy nhờ Admin mời bạn vào bảng.</p>}
     </div>
   )
 }

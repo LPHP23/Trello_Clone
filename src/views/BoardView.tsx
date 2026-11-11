@@ -4,7 +4,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import {
   Activity, Archive, Check, CheckCheck, ChevronDown, ChevronRight, Filter, Flag, GripVertical, Lock,
-  MessageCircle, MoreHorizontal, Paperclip, Pencil, Plus, Rows3, Trash2, X,
+  MessageCircle, MoreHorizontal, Paperclip, Pencil, Plus, Rows3, Trash2, Users, X,
 } from 'lucide-react'
 import { useStore } from '../store'
 import { Avatar, DueChip, Popover, daysUntil } from '../ui'
@@ -37,9 +37,10 @@ export default function BoardView({ id }: { id: string }) {
   if (!s.canSee(board)) {
     return (
       <div className="page">
-        <h1>Bảng riêng tư</h1>
+        <h1>Bạn không xem được bảng này</h1>
         <p className="muted">
-          Bạn chưa được thêm vào bảng này. Hãy nhờ Admin mời bạn. <a href="#/boards">Quay lại danh sách bảng</a>
+          Đây là bảng riêng tư. Chỉ người được Admin thêm vào danh sách thành viên của bảng mới mở được.{' '}
+          <a href="#/boards">Quay lại danh sách bảng</a>
         </p>
       </div>
     )
@@ -68,9 +69,13 @@ export default function BoardView({ id }: { id: string }) {
         <div className="board-toolbar">
           <span className="board-dot lg" style={{ background: colorHex(board.color) }} aria-hidden />
           <h1>{board.name}</h1>
-          {board.visibility === 'private' && (
-            <span className="muted" title="Bảng riêng tư, chỉ thành viên của bảng xem được">
-              <Lock size={13} />
+          {board.visibility === 'private' ? (
+            <span className="access-chip" title={`Bảng riêng tư. Chỉ ${board.members.length} người được thêm vào bảng mới thấy bảng này: ${board.members.join(', ')}`}>
+              <Lock size={12} /> Riêng tư · {board.members.length} người
+            </span>
+          ) : (
+            <span className="access-chip" title="Mọi thành viên của workspace đều xem được bảng này">
+              <Users size={12} /> Cả workspace
             </span>
           )}
           <span className="muted desc">{board.desc}</span>

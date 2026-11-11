@@ -20,7 +20,7 @@ export default function CardDetail() {
 
   const o = s.openCard
   if (!o) return null
-  const board = s.data.boards.find((b) => b.id === o.boardId)
+  const board = s.boards.find((b) => b.id === o.boardId)
   const list = board?.lists.find((l) => l.cards.some((c) => c.id === o.cardId))
   const card = list?.cards.find((c) => c.id === o.cardId)
   if (!board || !list || !card) return null

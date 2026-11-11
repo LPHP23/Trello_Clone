@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Copy, Link2, Minus, Plus, Trash2 } from 'lucide-react'
+import { Check, Copy, Link2, Lock, Minus, Plus, Trash2 } from 'lucide-react'
 import { useStore } from '../store'
 import { Avatar, Popover } from '../ui'
 import type { Role } from '../types'
@@ -15,6 +15,7 @@ const matrix: { action: string; admin: boolean; member: boolean; note?: string }
   { action: 'Tạo, đổi tên, xóa danh sách', admin: true, member: false },
   { action: 'Tạo, sửa, xóa bảng và đổi quyền riêng tư', admin: true, member: false },
   { action: 'Mời và xóa thành viên, đổi vai trò', admin: true, member: false },
+  { action: 'Xem bảng riêng tư', admin: false, member: false, note: 'Không theo vai trò. Chỉ người được Admin thêm vào đúng bảng đó mới thấy bảng' },
 ]
 
 export default function Members() {
@@ -32,10 +33,16 @@ export default function Members() {
     }
   }
 
-  const scopeLabel = (boards: string[] | null) => {
-    if (!boards) return 'Toàn workspace'
-    const names = boards.map((id) => s.data.boards.find((b) => b.id === id)?.name ?? id)
-    return names.length ? `Khách · ${names.join(', ')}` : 'Khách · chưa gán bảng'
+  // Danh sách bảng người này thật sự xem được. Người xem chỉ thấy các bảng chính mình cũng xem được.
+  const seenBy = (name: string) => {
+    const pool = admin ? s.data.boards : s.boards
+    return pool.filter((b) => s.canSee(b, name))
+  }
+  const scopeLabel = (name: string, boards: string[] | null) => {
+    const list = seenBy(name)
+    if (!list.length) return 'Chưa vào được bảng nào'
+    const head = list.map((b) => b.name).join(', ')
+    return boards ? `Khách · ${head}` : `${list.length} bảng · ${head}`
   }
 
   return (
@@ -94,39 +101,59 @@ export default function Members() {
               {admin ? (
                 <Popover
                   trigger={({ toggle }) => (
-                    <button className="btn scope-btn" onClick={toggle}>
-                      {scopeLabel(m.boards)}
+                    <button className="btn scope-btn" onClick={toggle} title={scopeLabel(m.name, m.boards)}>
+                      {scopeLabel(m.name, m.boards)}
                     </button>
                   )}
                 >
                   {() => (
                     <div className="menu wide">
-                      <span className="menu-hint">Chọn bảng mà {m.name} được vào. Bỏ chọn hết nghĩa là vào được toàn workspace.</span>
-                      {s.data.boards.map((b) => {
-                        const on = !!m.boards?.includes(b.id)
-                        return (
-                          <label className="check-line" key={b.id}>
-                            <input
-                              type="checkbox"
-                              checked={on}
-                              onChange={() => {
-                                const cur = m.boards ?? []
-                                const next = on ? cur.filter((x) => x !== b.id) : [...cur, b.id]
-                                s.setMemberBoards(m.name, next.length ? next : null)
-                              }}
-                            />
-                            {b.name}
-                          </label>
-                        )
-                      })}
-                      <button className="btn" onClick={() => s.setMemberBoards(m.name, null)} disabled={!m.boards}>
-                        <Minus size={13} /> Bỏ giới hạn, cho vào toàn workspace
-                      </button>
+                      <span className="menu-hint">
+                        Lớp 1 · phạm vi workspace. Bảng riêng tư còn cần được thêm vào bảng ở mục Cài đặt bảng, nếu không thì vẫn không thấy.
+                      </span>
+                      <label className="check-line">
+                        <input type="radio" name={`scope-${m.name}`} checked={!m.boards} onChange={() => s.setMemberBoards(m.name, null)} />
+                        Toàn workspace · mọi bảng chung
+                      </label>
+                      <label className="check-line">
+                        <input
+                          type="radio"
+                          name={`scope-${m.name}`}
+                          checked={!!m.boards}
+                          onChange={() => s.setMemberBoards(m.name, [])}
+                        />
+                        Khách · chỉ những bảng chọn bên dưới
+                      </label>
+                      {m.boards && (
+                        <span className="scope-list">
+                          {s.boards.map((b) => {
+                            const on = m.boards!.includes(b.id)
+                            return (
+                              <label className="check-line" key={b.id}>
+                                <input
+                                  type="checkbox"
+                                  checked={on}
+                                  onChange={() => {
+                                    const next = on ? m.boards!.filter((x) => x !== b.id) : [...m.boards!, b.id]
+                                    s.setMemberBoards(m.name, next)
+                                  }}
+                                />
+                                {b.name}
+                                {b.visibility === 'private' && (
+                                  <span className="muted small right">
+                                    <Lock size={11} /> {s.canSee(b, m.name) ? 'đã vào bảng' : 'chưa vào bảng'}
+                                  </span>
+                                )}
+                              </label>
+                            )
+                          })}
+                        </span>
+                      )}
                     </div>
                   )}
                 </Popover>
               ) : (
-                scopeLabel(m.boards)
+                scopeLabel(m.name, m.boards)
               )}
             </span>
             <span>
@@ -145,7 +172,7 @@ export default function Members() {
                   className="icon-btn"
                   title="Xóa khỏi workspace"
                   onClick={() => {
-                    const open = s.data.boards.flatMap((b) => b.lists.flatMap((l) => l.cards)).filter((c) => !c.archived && c.assignee === m.name).length
+                    const open = seenBy(m.name).flatMap((b) => b.lists.flatMap((l) => l.cards)).filter((c) => !c.archived && c.assignee === m.name).length
                     const warn = open ? `\n\n${m.name} đang phụ trách ${open} công việc. Hãy giao lại trước khi xóa.` : ''
                     if (window.confirm(`Xóa ${m.name} khỏi workspace?${warn}`)) s.removeMember(m.name)
                   }}
